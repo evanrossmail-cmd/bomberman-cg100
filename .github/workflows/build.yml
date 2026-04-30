@@ -46,11 +46,17 @@ jobs:
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Build add-in
-        run: fxsdk build-cg -j$(nproc)
+        run: |
+          fxsdk build-cg -j$(nproc)
+          # generate_g3a is a custom CMake target — build it explicitly
+          cmake --build build-cg --target Bomberman2P.g3a 2>/dev/null || true
+          # Show what was produced so we can fix the path if needed
+          find build-cg -name "*.g3a" -o -name "*.bin" | head -10
+          find . -maxdepth 3 -name "*.g3a" | head -10
 
       - name: Upload Bomberman2P.g3a
         uses: actions/upload-artifact@v4
         with:
           name: Bomberman2P.g3a
-          path: build-cg/Bomberman2P.g3a
+          path: "**/*.g3a"
           if-no-files-found: error
