@@ -1,0 +1,28 @@
+name: Build Bomberman2P.g3a
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: lephe/fxsdk-ubuntu:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build add-in
+        run: |
+          cmake -B build-cg -DCMAKE_TOOLCHAIN_FILE=$(fxsdk path cmake/toolchain-cg.cmake)
+          cmake --build build-cg
+
+      - name: Upload .g3a
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bomberman2P.g3a
+          path: build-cg/Bomberman2P.g3a
+          if-no-files-found: error
