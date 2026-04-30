@@ -46,7 +46,7 @@ jobs:
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Build add-in
-        run: fxsdk build cg -j$(nproc)
+        run: fxsdk build-cg -j$(nproc)
 
       - name: Upload Bomberman2P.g3a
         uses: actions/upload-artifact@v4
