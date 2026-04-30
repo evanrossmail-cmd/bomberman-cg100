@@ -31,10 +31,8 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          cd "$(mktemp -d)"
-          curl -s https://gitea.planet-casio.com/Lephenixnoir/GiteaPC/archive/master.tar.gz \
-            -o giteapc.tar.gz
-          tar -xzf giteapc.tar.gz && cd giteapc
+          git clone --depth=1 https://git.planet-casio.com/Lephenixnoir/GiteaPC /tmp/GiteaPC
+          cd /tmp/GiteaPC
           python3 giteapc.py install Lephenixnoir/GiteaPC -y
           giteapc install Lephenixnoir/fxsdk:noudisks2 \
                          Lephenixnoir/sh-elf-binutils \
