@@ -20,19 +20,12 @@ jobs:
             libpng-dev libudisks2-dev libglib2.0-dev \
             libmpfr-dev libmpc-dev libppl-dev
 
-      - name: Get latest gint commit (for cache key)
-        id: gint-hash
-        run: |
-          HASH=$(curl -s https://gitea.planet-casio.com/api/v1/repos/Lephenixnoir/gint/branches/master \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)['commit']['id'])")
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
-
       - name: Cache toolchain + gint
         id: cache
         uses: actions/cache@v4
         with:
           path: ~/.local
-          key: fxsdk-gint-${{ steps.gint-hash.outputs.hash }}
+          key: fxsdk-gint-v1
 
       - name: Install toolchain + gint via GiteaPC
         if: steps.cache.outputs.cache-hit != 'true'
