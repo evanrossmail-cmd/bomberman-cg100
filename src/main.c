@@ -85,7 +85,7 @@ static Player  p1, p2;
 
 /* ── Tick counter (set by timer callback at ~30 fps) ──────────── */
 static volatile int g_tick;
-static int on_tick(volatile int *v) { (*v)++; return TIMER_CONTINUE; }
+static int on_tick(void) { g_tick++; return TIMER_CONTINUE; }
 
 /* ── Helpers ──────────────────────────────────────────────────── */
 static inline int tx(int c) { return OX + c * TW; }
@@ -301,18 +301,18 @@ static void try_move(Player *p, int dr, int dc)
 static void handle_input(void)
 {
     if (p1.alive) {
-        if (key_down(KEY_UP))    try_move(&p1, -1,  0);
-        if (key_down(KEY_DOWN))  try_move(&p1,  1,  0);
-        if (key_down(KEY_LEFT))  try_move(&p1,  0, -1);
-        if (key_down(KEY_RIGHT)) try_move(&p1,  0,  1);
-        if (key_down(KEY_EXE))   place_bomb(&p1, 0);
+        if (keydown(KEY_UP))    try_move(&p1, -1,  0);
+        if (keydown(KEY_DOWN))  try_move(&p1,  1,  0);
+        if (keydown(KEY_LEFT))  try_move(&p1,  0, -1);
+        if (keydown(KEY_RIGHT)) try_move(&p1,  0,  1);
+        if (keydown(KEY_EXE))   place_bomb(&p1, 0);
     }
     if (p2.alive) {
-        if (key_down(KEY_8)) try_move(&p2, -1,  0);
-        if (key_down(KEY_2)) try_move(&p2,  1,  0);
-        if (key_down(KEY_4)) try_move(&p2,  0, -1);
-        if (key_down(KEY_6)) try_move(&p2,  0,  1);
-        if (key_down(KEY_5)) place_bomb(&p2, 1);
+        if (keydown(KEY_8)) try_move(&p2, -1,  0);
+        if (keydown(KEY_2)) try_move(&p2,  1,  0);
+        if (keydown(KEY_4)) try_move(&p2,  0, -1);
+        if (keydown(KEY_6)) try_move(&p2,  0,  1);
+        if (keydown(KEY_5)) place_bomb(&p2, 1);
     }
     if (p1.move_cd > 0) p1.move_cd--;
     if (p2.move_cd > 0) p2.move_cd--;
@@ -340,8 +340,8 @@ static void update(void)
 /* ── UI helpers ───────────────────────────────────────────────── */
 static void wait_exe(void)
 {
-    while (!key_down(KEY_EXE)) {}
-    while ( key_down(KEY_EXE)) {}
+    while (!keydown(KEY_EXE)) {}
+    while ( keydown(KEY_EXE)) {}
 }
 
 static void centred_text(int y, int col, const char *s)
@@ -383,7 +383,7 @@ int main(void)
 {
     /* Set up a ~30 fps timer */
     int tid = timer_configure(TIMER_ANY, 33000 /*µs*/,
-                              GINT_CALL(on_tick, &g_tick));
+                              GINT_CALL(on_tick));
     timer_start(tid);
 
     while (true) {
