@@ -2,25 +2,62 @@ name: Build Bomberman2P.g3a
 
 on:
   push:
-    branches: ["**"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: lephe/fxsdk-ubuntu:latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            curl git python3 build-essential cmake pkg-config \
+            python3-pil libusb-1.0-0-dev libudev-dev libsdl2-dev \
+            libpng-dev libudisks2-dev libglib2.0-dev \
+            libmpfr-dev libmpc-dev libppl-dev
+
+      - name: Get latest gint commit (for cache key)
+        id: gint-hash
+        run: |
+          HASH=$(curl -s https://gitea.planet-casio.com/api/v1/repos/Lephenixnoir/gint/branches/master \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['commit']['id'])")
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+      - name: Cache toolchain + gint
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: fxsdk-gint-${{ steps.gint-hash.outputs.hash }}
+
+      - name: Install toolchain + gint via GiteaPC
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$(mktemp -d)"
+          curl -s https://gitea.planet-casio.com/Lephenixnoir/GiteaPC/archive/master.tar.gz \
+            -o giteapc.tar.gz
+          tar -xzf giteapc.tar.gz && cd giteapc
+          python3 giteapc.py install Lephenixnoir/GiteaPC -y
+          giteapc install Lephenixnoir/fxsdk:noudisks2 \
+                         Lephenixnoir/sh-elf-binutils \
+                         Lephenixnoir/sh-elf-gcc -y
+          giteapc install Lephenixnoir/OpenLibm \
+                         Vhex-Kernel-Core/fxlibc \
+                         Lephenixnoir/sh-elf-gcc -y
+          giteapc install Lephenixnoir/gint -y
+
+      - name: Add fxsdk to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Build add-in
-        run: |
-          cmake -B build-cg -DCMAKE_TOOLCHAIN_FILE=$(fxsdk path cmake/toolchain-cg.cmake)
-          cmake --build build-cg
+        run: fxsdk build cg -j$(nproc)
 
-      - name: Upload .g3a
+      - name: Upload Bomberman2P.g3a
         uses: actions/upload-artifact@v4
         with:
           name: Bomberman2P.g3a
