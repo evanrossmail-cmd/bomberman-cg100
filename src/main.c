@@ -1,7 +1,7 @@
 /* Bomberman 2P — Casio fx-CG100 add-in
  *
- * Player 1 : Arrow keys to move,  EXE  to drop bomb
- * Player 2 : 8/2/4/6 to move,      5   to drop bomb
+ * Player 1 : 8/2/4/6 to move,      5   to drop bomb
+ * Player 2 : Arrow keys to move,  EXE  to drop bomb
  *
  * Build with fxSDK + gint:
  *   fxsdk build cg          (CMake workflow)
@@ -300,19 +300,21 @@ static void try_move(Player *p, int dr, int dc)
 /* ── One game tick ────────────────────────────────────────────── */
 static void handle_input(void)
 {
+    /* P1 — numpad (8/2/4/6 move, 5 bomb) */
     if (p1.alive) {
-        if (keydown(KEY_UP))    try_move(&p1, -1,  0);
-        if (keydown(KEY_DOWN))  try_move(&p1,  1,  0);
-        if (keydown(KEY_LEFT))  try_move(&p1,  0, -1);
-        if (keydown(KEY_RIGHT)) try_move(&p1,  0,  1);
-        if (keydown(KEY_EXE))   place_bomb(&p1, 0);
+        if (keydown(KEY_8)) try_move(&p1, -1,  0);
+        if (keydown(KEY_2)) try_move(&p1,  1,  0);
+        if (keydown(KEY_4)) try_move(&p1,  0, -1);
+        if (keydown(KEY_6)) try_move(&p1,  0,  1);
+        if (keydown(KEY_5)) place_bomb(&p1, 0);
     }
+    /* P2 — arrow keys + EXE bomb */
     if (p2.alive) {
-        if (keydown(KEY_8)) try_move(&p2, -1,  0);
-        if (keydown(KEY_2)) try_move(&p2,  1,  0);
-        if (keydown(KEY_4)) try_move(&p2,  0, -1);
-        if (keydown(KEY_6)) try_move(&p2,  0,  1);
-        if (keydown(KEY_5)) place_bomb(&p2, 1);
+        if (keydown(KEY_UP))    try_move(&p2, -1,  0);
+        if (keydown(KEY_DOWN))  try_move(&p2,  1,  0);
+        if (keydown(KEY_LEFT))  try_move(&p2,  0, -1);
+        if (keydown(KEY_RIGHT)) try_move(&p2,  0,  1);
+        if (keydown(KEY_EXE))   place_bomb(&p2, 1);
     }
     if (p1.move_cd > 0) p1.move_cd--;
     if (p2.move_cd > 0) p2.move_cd--;
@@ -354,8 +356,8 @@ static void title_screen(void)
 {
     dclear(C_BLACK);
     centred_text(44,  COL_FIRE_O, "BOMBERMAN  2P");
-    centred_text(72,  C_WHITE,    "P1 : Arrow keys + EXE");
-    centred_text(88,  C_WHITE,    "P2 : 8/2/4/6  +  5");
+    centred_text(72,  C_WHITE,    "P1 : 8/2/4/6  +  5");
+    centred_text(88,  C_WHITE,    "P2 : Arrow keys + EXE");
     centred_text(130, COL_DEAD,   "Press EXE to start");
     dupdate();
     wait_exe();
