@@ -10,8 +10,6 @@
 
 #include <gint/display.h>
 #include <gint/keyboard.h>
-#include <gint/timer.h>
-#include <gint/gint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
@@ -83,9 +81,12 @@ static Fire    fires[MAX_FIRES];
 static int     nfires;
 static Player  p1, p2;
 
-/* ── Tick counter (set by timer callback at ~30 fps) ──────────── */
-static volatile int g_tick;
-static int on_tick(void) { g_tick++; return TIMER_CONTINUE; }
+/* ── Simple frame throttle (~30 fps via busy-wait) ───────────── */
+static void frame_wait(void)
+{
+    volatile int d = 180000;
+    while (d--) {}
+}
 
 /* ── Helpers ──────────────────────────────────────────────────── */
 static inline int tx(int c) { return OX + c * TW; }
@@ -340,56 +341,58 @@ static void update(void)
 }
 
 /* ── UI helpers ───────────────────────────────────────────────── */
-static void wait_exe(void)
-{
-    while (!keydown(KEY_EXE)) {}
-    while ( keydown(KEY_EXE)) {}
-}
-
 static void centred_text(int y, int col, const char *s)
 {
     int x = SW/2 - (int)(strlen(s) * 6) / 2;
     dtext(x, y, col, s);
 }
 
-static void title_screen(void)
+/* Returns true if the user wants to exit (MENU pressed). */
+static bool wait_key(void)
+{
+    while (true) {
+        if (keydown(KEY_MENU))  return true;
+        if (keydown(KEY_EXE)) {
+            while (keydown(KEY_EXE)) {}   /* wait for release */
+            return false;
+        }
+    }
+}
+
+static bool title_screen(void)
 {
     dclear(C_BLACK);
     centred_text(44,  COL_FIRE_O, "BOMBERMAN  2P");
-    centred_text(72,  C_WHITE,    "P1 : 8/2/4/6  +  5");
-    centred_text(88,  C_WHITE,    "P2 : Arrow keys + EXE");
-    centred_text(130, COL_DEAD,   "Press EXE to start");
+    centred_text(68,  C_WHITE,    "P1 : 8/2/4/6  +  5");
+    centred_text(84,  C_WHITE,    "P2 : Arrows  + EXE");
+    centred_text(112, COL_P1,     "EXE   - start");
+    centred_text(126, COL_DEAD,   "MENU  - quit");
     dupdate();
-    wait_exe();
+    return wait_key();   /* true = user pressed MENU → exit */
 }
 
-static void result_screen(void)
+static bool result_screen(void)
 {
-    render();   /* show the final game frame underneath the banner */
+    render();
 
     bool both = !p1.alive && !p2.alive;
-    const char *msg = both       ? "   DRAW!"  :
-                      !p2.alive  ? "P1 WINS!"  : "P2 WINS!";
+    const char *msg = both      ? "   DRAW!"  :
+                      !p2.alive ? "P1 WINS!"  : "P2 WINS!";
     int col = both ? C_WHITE : (!p2.alive ? COL_P1 : COL_P2);
 
     int x = SW/2 - 44, y = SH/2 - 12;
-    drect(x-4, y-4, x+92, y+28, C_BLACK);
-    centred_text(y,    col,     msg);
-    centred_text(y+14, COL_DEAD, "EXE to play again");
+    drect(x-4, y-4, x+96, y+30, C_BLACK);
+    centred_text(y,    col,      msg);
+    centred_text(y+14, COL_P1,  "EXE-replay  MENU-quit");
     dupdate();
-    wait_exe();
+    return wait_key();
 }
 
 /* ── Entry point ──────────────────────────────────────────────── */
 int main(void)
 {
-    /* Set up a ~30 fps timer */
-    int tid = timer_configure(TIMER_ANY, 33000 /*µs*/,
-                              GINT_CALL(on_tick));
-    timer_start(tid);
-
     while (true) {
-        title_screen();
+        if (title_screen()) return 0;   /* MENU pressed → exit */
 
         /* Reset everything */
         make_map();
@@ -397,18 +400,15 @@ int main(void)
         p1 = (Player){ 1,      1,      true, 1, 2, 0 };
         p2 = (Player){ GH-2,   GW-2,   true, 1, 2, 0 };
 
-        /* Game loop: wait for timer tick, then step */
+        /* Game loop */
         while (p1.alive && p2.alive) {
-            while (!g_tick) {}
-            g_tick = 0;
+            if (keydown(KEY_MENU)) return 0;
             handle_input();
             update();
             render();
+            frame_wait();
         }
 
-        result_screen();
+        if (result_screen()) return 0;  /* MENU pressed → exit */
     }
-
-    timer_stop(tid);
-    return 1;
 }
