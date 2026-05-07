@@ -1,11 +1,11 @@
-/* Bomberman 2P — Casio fx-CG100 add-in
+/* Bomberman 2P — Casio fx-CG50 add-in
  *
- * Player 1 : 8/2/4/6 to move,      5   to drop bomb
- * Player 2 : Arrow keys to move,  EXE  to drop bomb
+ * Player 1 : 8/2/4/6 to move,      5    to drop bomb
+ * Player 2 : Arrow keys to move,  EXE   to drop bomb
+ * MENU     : Exit at any time
  *
  * Build with fxSDK + gint:
- *   fxsdk build cg          (CMake workflow)
- *   - or -  make            (legacy Makefile workflow)
+ *   fxsdk build-cg
  */
 
 #include <gint/display.h>
@@ -15,7 +15,7 @@
 #include <string.h>
 
 /* ── Screen / grid layout ─────────────────────────────────────── */
-#define SW  396         /* screen width  (fx-CG50/CG100 with gint) */
+#define SW  396         /* screen width  (fx-CG50 with gint) */
 #define SH  224         /* screen height */
 #define GW  13          /* grid columns  */
 #define GH  9           /* grid rows     */
@@ -46,11 +46,13 @@
 #define T_BRICK  2   /* destructible   */
 
 /* ── Tuning constants ─────────────────────────────────────────── */
-#define BOMB_FUSE   90   /* game ticks until explosion  */
-#define FIRE_LIFE   22   /* game ticks fire persists    */
-#define MOVE_DELAY   7   /* ticks between held-key steps */
-#define MAX_BOMBS   10
-#define MAX_FIRES   80
+#define BOMB_FUSE      90   /* game ticks until explosion  */
+#define FIRE_LIFE      22   /* game ticks fire persists    */
+#define MOVE_DELAY      7   /* ticks between held-key steps */
+#define MAX_BOMBS      10
+#define MAX_FIRES      80
+/* ~2 minutes at ~30fps; sudden-death (draw) after this */
+#define TIMEOUT_FRAMES 3600
 
 /* ── Data types ───────────────────────────────────────────────── */
 typedef struct {
@@ -80,6 +82,7 @@ static int     nbombs;
 static Fire    fires[MAX_FIRES];
 static int     nfires;
 static Player  p1, p2;
+static int     game_frames;   /* ticks elapsed this round (for HUD timer) */
 
 /* ── Simple frame throttle (~30 fps via busy-wait) ───────────── */
 static void frame_wait(void)
@@ -92,20 +95,44 @@ static void frame_wait(void)
 static inline int tx(int c) { return OX + c * TW; }
 static inline int ty(int r) { return OY + r * TH; }
 
-/* Minimal LCG so we don't need stdlib rand seeding quirks */
-static uint32_t rng_state = 0xDEADBEEF;
+/* Minimal LCG — seeded from title-screen frame count each new game
+   so every round has a different map layout.                        */
+static uint32_t rng_state = 1;
 static int rng2(void)
 {
     rng_state = rng_state * 1664525u + 1013904223u;
     return (rng_state >> 16) & 1;
 }
 
+/* Draw a fixed-width decimal integer (leading zeros). */
+static void draw_int(int x, int y, int col, int val, int digits)
+{
+    char buf[8];
+    int i = digits;
+    buf[i] = '\0';
+    while (i-- > 0) {
+        buf[i] = '0' + (val % 10);
+        val /= 10;
+    }
+    dtext(x, y, col, buf);
+}
+
 /* ── Map generation ───────────────────────────────────────────── */
+/* Returns true for cells that must stay empty around spawn corners.
+   Permanent wall slots (even row AND even col) are handled first in
+   make_map() so they are never overridden by this check.
+   P1 spawns at (1,1), P2 at (GH-2, GW-2).
+   We clear a plus-shaped 3-tile corridor in each corner so players
+   cannot be trapped immediately.                                    */
 static bool spawn_safe(int r, int c)
 {
-    /* Keep the 2-tile L-corner around each player spawn clear */
-    return ((r==1&&c==1)||(r==1&&c==2)||(r==2&&c==1) ||
-            (r==GH-2&&c==GW-2)||(r==GH-2&&c==GW-3)||(r==GH-3&&c==GW-2));
+    /* P1 corner — row 1, cols 1-3  AND  col 1, rows 1-3 */
+    if (r == 1       && c >= 1      && c <= 3)      return true;
+    if (c == 1       && r >= 1      && r <= 3)      return true;
+    /* P2 corner — row GH-2, cols GW-4..GW-2  AND  col GW-2, rows GH-4..GH-2 */
+    if (r == GH-2    && c >= GW-4   && c <= GW-2)   return true;
+    if (c == GW-2    && r >= GH-4   && r <= GH-2)   return true;
+    return false;
 }
 
 static void make_map(void)
@@ -140,7 +167,7 @@ static void draw_tile(int r, int c)
         drect(x,   y,   x+TW-1, y+TH-1, COL_BRICK_D);
         drect(x+3, y+3, x+TW-4, y+TH-4, COL_BRICK_L);
         /* mortar lines */
-        drect(x,       y+TH/2-1, x+TW-1, y+TH/2,   COL_BRICK_D);
+        drect(x,        y+TH/2-1, x+TW-1, y+TH/2,   COL_BRICK_D);
         drect(x+TW/2-1, y+1,      x+TW/2, y+TH/2-2, COL_BRICK_D);
         break;
     }
@@ -164,15 +191,26 @@ static void draw_bomb(const Bomb *b)
     drect(x+3, y+6,  x+TW-4, y+TH-7, COL_BOMB);
 
     /* Fuse — flicker rate increases near detonation */
-    int rate  = (b->timer > 40) ? 8 : (b->timer > 20) ? 4 : 2;
-    int fcol  = ((b->timer / rate) & 1) ? COL_FUSE_A : COL_FUSE_B;
+    int rate = (b->timer > 40) ? 8 : (b->timer > 20) ? 4 : 2;
+    int fcol = ((b->timer / rate) & 1) ? COL_FUSE_A : COL_FUSE_B;
     drect(x+TW/2-1, y+1, x+TW/2+1, y+5, fcol);
 }
 
+/* Draw the player sprite.  Dead players are rendered as a dim grey
+   tombstone so their last position remains visible on the board.    */
 static void draw_player(const Player *p, int col)
 {
-    if (!p->alive) return;
     int x = tx(p->c), y = ty(p->r);
+
+    if (!p->alive) {
+        /* Dim grey body with closed (X) eyes — clearly dead but locatable */
+        drect(x+2,     y+2,     x+TW-3,  y+TH-3,  COL_DEAD);
+        /* Left eye — small horizontal bar (closed) */
+        drect(x+5,     y+7,     x+9,     y+8,     C_BLACK);
+        /* Right eye */
+        drect(x+TW-10, y+7,     x+TW-6,  y+8,     C_BLACK);
+        return;
+    }
 
     drect(x+2,     y+2,     x+TW-3,  y+TH-3,  col);
     /* Eyes */
@@ -201,17 +239,37 @@ static void render(void)
     for (int i = 0; i < nbombs; i++)
         draw_bomb(&bombs[i]);
 
-    /* Players */
-    draw_player(&p1, p1.alive ? COL_P1 : COL_DEAD);
-    draw_player(&p2, p2.alive ? COL_P2 : COL_DEAD);
+    /* Players (dead players rendered as grey markers, not invisible) */
+    draw_player(&p1, COL_P1);
+    draw_player(&p2, COL_P2);
 
     /* HUD strip */
     int sy = OY + GH*TH + 3;
     drect(0, sy, SW-1, SH-1, COL_HUD);
-    dtext(6,        sy+4, p1.alive ? COL_P1 : COL_DEAD, "P1  ALIVE");
-    dtext(SW/2 + 6, sy+4, p2.alive ? COL_P2 : COL_DEAD, "P2  ALIVE");
-    if (!p1.alive) dtext(6,        sy+4, COL_DEAD, "P1  DEAD ");
-    if (!p2.alive) dtext(SW/2 + 6, sy+4, COL_DEAD, "P2  DEAD ");
+
+    /* P1 status — left */
+    dtext(6, sy+4,
+          p1.alive ? COL_P1 : COL_DEAD,
+          p1.alive ? "P1 ALIVE" : "P1  DEAD");
+
+    /* Countdown timer — centred
+       "M:SS" = 4 chars * 6px = 24px; start at SW/2 - 12            */
+    int rem  = TIMEOUT_FRAMES - game_frames;
+    if (rem < 0) rem = 0;
+    int secs = rem / 30;
+    int mm   = secs / 60;
+    int ss   = secs % 60;
+    /* Warn in orange when under 30 seconds remain */
+    int tcol = (rem < 900) ? COL_FIRE_O : C_WHITE;
+    int cx   = SW/2 - 12;
+    draw_int(cx,    sy+4, tcol, mm, 1);
+    dtext(cx+6,     sy+4, tcol, ":");
+    draw_int(cx+12, sy+4, tcol, ss, 2);
+
+    /* P2 status — right-aligned (8 chars * 6 = 48px from right edge) */
+    dtext(SW - 54, sy+4,
+          p2.alive ? COL_P2 : COL_DEAD,
+          p2.alive ? "P2 ALIVE" : "P2  DEAD");
 
     dupdate();
 }
@@ -242,7 +300,8 @@ static void explode(int idx);
 static void explode(int idx)
 {
     Bomb b = bombs[idx];
-    /* Remove bomb first to avoid double-explosion */
+    /* Remove this bomb first (swap with last) to avoid double-explosion.
+       The bomb now at slot idx is processed next iteration.           */
     bombs[idx] = bombs[--nbombs];
 
     add_fire(b.r, b.c);
@@ -253,7 +312,7 @@ static void explode(int idx)
             int er = b.r + dirs[d][0]*dist;
             int ec = b.c + dirs[d][1]*dist;
             if (er<0||er>=GH||ec<0||ec>=GW) break;
-            if (grid[er][ec] == T_WALL) break;
+            if (grid[er][ec] == T_WALL)     break;
 
             add_fire(er, ec);
 
@@ -281,40 +340,43 @@ static void place_bomb(Player *p, int owner_id)
 }
 
 /* ── Player movement ──────────────────────────────────────────── */
-static bool can_enter(int r, int c)
+/* Pass the OTHER player so we can block walking through them.      */
+static bool can_enter(int r, int c, const Player *other)
 {
     if (r<0||r>=GH||c<0||c>=GW) return false;
     if (grid[r][c] != T_EMPTY)  return false;
     if (bomb_at(r, c))          return false;
+    /* Block walking through the other living player */
+    if (other->alive && other->r == r && other->c == c) return false;
     return true;
 }
 
-static void try_move(Player *p, int dr, int dc)
+static void try_move(Player *p, int dr, int dc, const Player *other)
 {
     if (p->move_cd > 0) return;
-    if (!can_enter(p->r + dr, p->c + dc)) return;
+    if (!can_enter(p->r + dr, p->c + dc, other)) return;
     p->r += (int8_t)dr;
     p->c += (int8_t)dc;
     p->move_cd = MOVE_DELAY;
 }
 
-/* ── One game tick ────────────────────────────────────────────── */
+/* ── Per-frame logic ──────────────────────────────────────────── */
 static void handle_input(void)
 {
     /* P1 — numpad (8/2/4/6 move, 5 bomb) */
     if (p1.alive) {
-        if (keydown(KEY_8)) try_move(&p1, -1,  0);
-        if (keydown(KEY_2)) try_move(&p1,  1,  0);
-        if (keydown(KEY_4)) try_move(&p1,  0, -1);
-        if (keydown(KEY_6)) try_move(&p1,  0,  1);
+        if (keydown(KEY_8)) try_move(&p1, -1,  0, &p2);
+        if (keydown(KEY_2)) try_move(&p1,  1,  0, &p2);
+        if (keydown(KEY_4)) try_move(&p1,  0, -1, &p2);
+        if (keydown(KEY_6)) try_move(&p1,  0,  1, &p2);
         if (keydown(KEY_5)) place_bomb(&p1, 0);
     }
     /* P2 — arrow keys + EXE bomb */
     if (p2.alive) {
-        if (keydown(KEY_UP))    try_move(&p2, -1,  0);
-        if (keydown(KEY_DOWN))  try_move(&p2,  1,  0);
-        if (keydown(KEY_LEFT))  try_move(&p2,  0, -1);
-        if (keydown(KEY_RIGHT)) try_move(&p2,  0,  1);
+        if (keydown(KEY_UP))    try_move(&p2, -1,  0, &p1);
+        if (keydown(KEY_DOWN))  try_move(&p2,  1,  0, &p1);
+        if (keydown(KEY_LEFT))  try_move(&p2,  0, -1, &p1);
+        if (keydown(KEY_RIGHT)) try_move(&p2,  0,  1, &p1);
         if (keydown(KEY_EXE))   place_bomb(&p2, 1);
     }
     if (p1.move_cd > 0) p1.move_cd--;
@@ -323,16 +385,24 @@ static void handle_input(void)
 
 static void update(void)
 {
-    /* Bombs */
-    for (int i = nbombs - 1; i >= 0; i--) {
+    /* Bombs — forward index loop.
+       explode() swap-removes bombs[i], so after an explosion we must
+       re-examine the same index (now holding a different bomb) rather
+       than skipping it.                                               */
+    int i = 0;
+    while (i < nbombs) {
         if (--bombs[i].timer <= 0)
-            explode(i);
+            explode(i);   /* slot i now holds the swapped-in bomb */
+        else
+            i++;
     }
-    /* Fire */
+
+    /* Fire — reverse loop is safe here (we only remove, never add) */
     for (int i = nfires - 1; i >= 0; i--) {
         if (--fires[i].dur <= 0)
             fires[i] = fires[--nfires];
     }
+
     /* Kill players standing in fire */
     for (int i = 0; i < nfires; i++) {
         if (p1.alive && p1.r==fires[i].r && p1.c==fires[i].c) p1.alive = false;
@@ -347,28 +417,50 @@ static void centred_text(int y, int col, const char *s)
     dtext(x, y, col, s);
 }
 
-/* Returns true if the user wants to exit (MENU pressed). */
+/* Wait for a confirm or exit key.
+   KEY_EXE  — P2's natural confirm button.
+   KEY_5    — P1's natural bomb/confirm button (same hand as numpad).
+   KEY_MENU — exit the add-in.
+   Returns true if MENU was pressed (caller should exit).            */
 static bool wait_key(void)
 {
     while (true) {
-        if (keydown(KEY_MENU))  return true;
-        if (keydown(KEY_EXE)) {
-            while (keydown(KEY_EXE)) {}   /* wait for release */
+        if (keydown(KEY_MENU)) return true;
+        if (keydown(KEY_EXE) || keydown(KEY_5)) {
+            /* Debounce: wait for both keys to be released */
+            while (keydown(KEY_EXE) || keydown(KEY_5)) {}
             return false;
         }
     }
 }
 
+/* Show the title / instructions screen.
+   While waiting for input we count frames and use the count to seed
+   the RNG, ensuring a different map layout each round.              */
 static bool title_screen(void)
 {
     dclear(C_BLACK);
     centred_text(44,  COL_FIRE_O, "BOMBERMAN  2P");
     centred_text(68,  C_WHITE,    "P1 : 8/2/4/6  +  5");
     centred_text(84,  C_WHITE,    "P2 : Arrows  + EXE");
-    centred_text(112, COL_P1,     "EXE   - start");
-    centred_text(126, COL_DEAD,   "MENU  - quit");
+    centred_text(112, COL_P1,     "EXE / 5 - start");
+    centred_text(126, COL_DEAD,   "MENU    - quit");
     dupdate();
-    return wait_key();   /* true = user pressed MENU → exit */
+
+    uint32_t frame = 0;
+    while (true) {
+        frame++;
+        frame_wait();
+        if (keydown(KEY_MENU)) {
+            rng_state = frame | 1u;
+            return true;
+        }
+        if (keydown(KEY_EXE) || keydown(KEY_5)) {
+            while (keydown(KEY_EXE) || keydown(KEY_5)) {}
+            rng_state = frame | 1u;
+            return false;
+        }
+    }
 }
 
 static bool result_screen(void)
@@ -380,10 +472,12 @@ static bool result_screen(void)
                       !p2.alive ? "P1 WINS!"  : "P2 WINS!";
     int col = both ? C_WHITE : (!p2.alive ? COL_P1 : COL_P2);
 
-    int x = SW/2 - 44, y = SH/2 - 12;
-    drect(x-4, y-4, x+96, y+30, C_BLACK);
-    centred_text(y,    col,      msg);
-    centred_text(y+14, COL_P1,  "EXE-replay  MENU-quit");
+    /* Box wide enough for the longest line of text */
+    int bx1 = 120, bx2 = 276;
+    int by1 = SH/2 - 16, by2 = SH/2 + 18;
+    drect(bx1, by1, bx2, by2, C_BLACK);
+    centred_text(SH/2 - 10, col,     msg);
+    centred_text(SH/2 + 2,  COL_DEAD,"EXE/5-replay  MENU-quit");
     dupdate();
     return wait_key();
 }
@@ -392,23 +486,30 @@ static bool result_screen(void)
 int main(void)
 {
     while (true) {
-        if (title_screen()) return 0;   /* MENU pressed → exit */
+        if (title_screen()) return 0;   /* MENU → exit */
 
-        /* Reset everything */
+        /* Reset everything for a fresh round */
         make_map();
-        nbombs = nfires = 0;
-        p1 = (Player){ 1,      1,      true, 1, 2, 0 };
-        p2 = (Player){ GH-2,   GW-2,   true, 1, 2, 0 };
+        nbombs = nfires = game_frames = 0;
+        p1 = (Player){ 1,    1,    true, 1, 2, 0 };
+        p2 = (Player){ GH-2, GW-2, true, 1, 2, 0 };
 
         /* Game loop */
         while (p1.alive && p2.alive) {
             if (keydown(KEY_MENU)) return 0;
             handle_input();
             update();
+            game_frames++;
             render();
             frame_wait();
+
+            /* Timeout — end as a draw (sudden death) */
+            if (game_frames >= TIMEOUT_FRAMES) {
+                p1.alive = p2.alive = false;
+                break;
+            }
         }
 
-        if (result_screen()) return 0;  /* MENU pressed → exit */
+        if (result_screen()) return 0;  /* MENU → exit */
     }
 }
